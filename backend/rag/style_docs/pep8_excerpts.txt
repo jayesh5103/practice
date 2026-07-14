@@ -1,0 +1,23 @@
+RULE: Naming — Functions and Variables (PEP 8 §3.16.1)
+Use lowercase words separated by underscores (snake_case) for all function names and variable names: calculate_total, user_name, is_valid. Avoid single-letter names except for conventional loop counters (i, j, k) or very short-lived math variables. Opaque parameter names like a, b, c or x, y are a code smell — they force every caller to read the function body to understand what each argument means, rather than communicating intent through the name.
+
+RULE: Naming — Classes (PEP 8 §3.16.2)
+Class names should use CapWords (also known as PascalCase): each word starts with a capital letter, no underscores. Examples: UserAccount, DatabaseConnection, HttpResponse. Exception classes should end in the word "Error": FileNotFoundError, ValidationError. Mixing snake_case into class names is a clear convention violation and signals the class may have been written without PEP 8 awareness.
+
+RULE: Naming — Constants (PEP 8 §3.16.3)
+Module-level constants should be written in UPPER_CASE_WITH_UNDERSCORES: MAX_RETRIES, DEFAULT_TIMEOUT, BASE_URL, API_VERSION. This convention signals to every reader of the module that the value is not expected to change at runtime. Using lowercase or camelCase for constants makes them visually indistinguishable from mutable variables.
+
+RULE: Type Annotations (PEP 484 / PEP 8 §3.12)
+Add type annotations to all public function signatures — both parameters and return types. Example: def calculate_average(numbers: list[float]) -> float. Without annotations, the types of inputs and outputs must be inferred from context or documentation, which is error-prone and breaks IDE type checking. Annotated code is self-documenting and enables static analysis with mypy.
+
+RULE: Docstrings (PEP 257 / PEP 8 §3.8)
+Write docstrings for all public modules, functions, classes, and methods. Use triple double-quotes: """Like this.""". The first line must be a short imperative summary written as a command, not a description: "Return the average of a list." not "This function returns the average...". Document parameters, return values, and any exceptions raised if they are not obvious from the signature.
+
+RULE: Line Length (PEP 8 §2.1)
+Limit all lines to a maximum of 79 characters. For docstrings and comments, limit to 72 characters. Code that exceeds this limit is harder to review in split-screen editors, code review tools, and terminals. Break long expressions using Python's implicit continuation inside parentheses, brackets, or braces. If a line is long because it does too many things, that is also a signal to refactor.
+
+RULE: Whitespace in Expressions (PEP 8 §4)
+Avoid extra spaces immediately inside parentheses, brackets, or braces: use spam(ham[1]) not spam( ham[ 1] ). Don't use spaces around = in keyword arguments or default values: def f(x=0) not def f(x = 0). Surround binary operators with a single space on each side: x = y + z not x=y+z or x = y+z. Consistent whitespace makes expressions readable at a glance.
+
+RULE: Imports (PEP 8 §5)
+Each import should be on its own line: write "import os" and "import sys" separately, not "import os, sys". From-imports that import multiple names on one line are acceptable: "from os.path import join, exists". Group imports in this order, separated by blank lines: (1) standard library imports, (2) related third-party imports, (3) local application imports. Within each group, sort alphabetically by module name.

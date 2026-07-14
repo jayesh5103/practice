@@ -1,0 +1,23 @@
+RULE: Variable and Function Naming (Airbnb §23.1)
+Use camelCase for variable names, function names, and object properties: userName, calculateTotal, isLoggedIn, fetchUserData. Use PascalCase for constructor functions and ES6 class names: UserAccount, HttpClient, EventEmitter. Avoid single-letter names or opaque abbreviations (btn, cb, el, n, v) — use descriptive names that communicate intent without requiring the reader to look up the definition.
+
+RULE: Variable Declarations — const vs let vs var (Airbnb §13)
+Never declare variables with var. Always use const by default; only use let when you know the binding will be reassigned after declaration. const communicates immutability of the binding (not the value), which reduces cognitive load — a reader can trust that a const binding always refers to the same thing. Seeing let signals "this will change; pay attention." Seeing var signals nothing useful and has function-scoped hoisting that surprises most developers.
+
+RULE: Arrow Functions (Airbnb §8)
+Use arrow function expressions (=>) for anonymous functions, callbacks, and function expressions. Arrow functions are more concise and lexically bind this, avoiding the common confusion where a callback's this refers to something unexpected: use arr.map(item => item.value) instead of arr.map(function(item) { return item.value; }). For single-expression bodies, omit the braces and return keyword. Use named function declarations for top-level functions that need to be referenced by name.
+
+RULE: Semicolons (Airbnb §21)
+Always terminate statements with semicolons. Do not rely on Automatic Semicolon Insertion (ASI). While ASI handles the common case, it fails on lines starting with (, [, or `, which can cause the parser to join two unrelated statements into one, producing a runtime error or incorrect behavior. Explicit semicolons make statement boundaries unambiguous and eliminate this category of bug entirely.
+
+RULE: Template Literals (Airbnb §6.4)
+Use template literals (backtick strings) instead of string concatenation when you need to embed variables, expressions, or produce multiline strings: use `Hello, ${name}!` instead of "Hello, " + name + "!". Template literals are easier to read, support multiline strings without escape characters, and eliminate the subtle spacing errors common in concatenation (e.g., missing a space before a variable). Reserve regular strings for simple literals with no interpolation.
+
+RULE: Destructuring (Airbnb §5)
+Use object destructuring to extract properties from objects, and array destructuring to extract elements from arrays: const { name, age } = user; const [first, second] = items. In function parameters, destructure objects to make it explicit which properties the function actually uses: function greet({ name, greeting = "Hello" }) instead of function greet(options). Destructuring reduces repetition, makes consumed properties visible at the call site, and shortens code.
+
+RULE: JSDoc Comments (Google JS Style §7.9)
+Document all non-obvious functions and public APIs with JSDoc-style block comments: /** @param {string} name - The display name. @returns {string} A formatted greeting. */. At minimum, document what each parameter represents when it is not obvious from the name alone. Without documentation, callers must read the full function body to understand the contract — this is especially painful for functions with multiple parameters of the same type.
+
+RULE: Line Length and Indentation (Airbnb §19)
+Keep lines to a maximum of 100 characters. Use 2 spaces for indentation — never tabs. Break long method chains across multiple lines with each chained call on its own line, indented by 2 spaces. Opening braces stay on the same line as their statement; closing braces go on their own line. Consistent indentation and line length make code reviewable in side-by-side diffs without horizontal scrolling.
