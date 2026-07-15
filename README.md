@@ -45,7 +45,8 @@ An explanation-first code review tool that analyzes Python and JavaScript snippe
 ```
 
 1.  **Code Input**: User submits a code snippet (up to 500 lines) and selects the language (Python, JavaScript, or Auto-detect).
-2.  **RAG Query**: Backend retrieves the top-2 style guide rule excerpts matching the code keywords.
+2.  **RAG Query**: Backend retrieves the top-1 style guide rule excerpt matching the code keywords.
+
 3.  **Primary Attempt**: Backend calls the Groq API with the code and style excerpts.
 4.  **Fallback Path**: If the Groq API call fails (e.g., due to rate limits or invalid keys), the backend catches the error and runs local linter subprocesses (Pylint/ESLint).
 5.  **Clean Output**: Returns a structured JSON list of issues mapped consistently to `bug` or `style` severity levels. If both paths fail, it gracefully returns a 500 error allowing the frontend to show a clean retry screen.
