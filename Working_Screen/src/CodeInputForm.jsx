@@ -120,7 +120,7 @@ export default function CodeInputForm({
 
 // Deliberately simple heuristic — a scaffold, not a real language parser.
 // Returns "python" | "javascript" | null (null = couldn't confidently tell).
-function detectLanguage(code) {
+export function detectLanguage(code) {
   const pythonHints = /\bdef\s+\w+\(|^\s*import\s+\w+|\bprint\(/m;
   const jsHints = /\bfunction\s+\w+\(|=>|\bconst\s+\w+\s*=|\bconsole\.log\(/m;
   const looksLikePython = pythonHints.test(code);
@@ -128,6 +128,61 @@ function detectLanguage(code) {
   if (looksLikePython && !looksLikeJs) return "python";
   if (looksLikeJs && !looksLikePython) return "javascript";
   return null;
+}
+
+/**
+ * Heuristic to check if a code snippet looks syntactically broken (unmatched brackets or quotes).
+ * Ignores brackets nested inside strings/quotes to avoid false positives.
+ * @param {string} code
+ * @returns {boolean}
+ */
+export function looksSyntacticallyBroken(code) {
+  const brackets = { '(': ')', '{': '}', '[': ']' };
+  const stack = [];
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktick = false;
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i];
+
+    // Escape character handling
+    if (char === '\\') {
+      i++;
+      continue;
+    }
+
+    // Quote toggling
+    if (char === "'" && !inDoubleQuote && !inBacktick) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
+    if (char === '"' && !inSingleQuote && !inBacktick) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+    if (char === '`' && !inSingleQuote && !inDoubleQuote) {
+      inBacktick = !inBacktick;
+      continue;
+    }
+
+    // If inside a quote, ignore all other characters (no braces checking)
+    if (inSingleQuote || inDoubleQuote || inBacktick) {
+      continue;
+    }
+
+    if (char in brackets) {
+      stack.push(char);
+    } else if (Object.values(brackets).includes(char)) {
+      const top = stack.pop();
+      if (!top || brackets[top] !== char) {
+        return true; // Unmatched closing bracket
+      }
+    }
+  }
+
+  // Returns true if there are unmatched opening brackets or unclosed quotes
+  return stack.length > 0 || inSingleQuote || inDoubleQuote || inBacktick;
 }
 
 /* --------------------------------------------------------------------
