@@ -91,7 +91,7 @@ app.add_middleware(
 
 # Initialised once at startup — reads GROQ_API_KEY from the environment.
 _ai_client = Groq(
-    api_key=os.environ.get("GROQ_API_KEY"),
+    api_key=os.environ.get("GROQ_API_KEY") or "gsk_dummy_key_for_testing_and_fallback_only",
 )
 
 _AI_MODEL = "llama-3.3-70b-versatile"
