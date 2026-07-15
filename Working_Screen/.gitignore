@@ -22,12 +22,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-*.oxlintrc.json
-package-lock.json
-package.json
-vite.config.js
-README.md
+# Ignore local environment files or other meta files
 _metadata.json
-package.json
-
