@@ -20,11 +20,13 @@ Fallback: rule-based mock — see FALLBACK REVIEW LOGIC section below.
           Real Pylint/ESLint execution is a separate, later task.
 """
 
+import asyncio
 import json
 import logging
 import os
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,7 +36,8 @@ from groq import Groq
 
 from prompts import build_system_prompt_with_rag
 from rag.retriever import retrieve
-from schemas import Issue, ReviewRequest, ReviewResponse
+from schemas import Issue, ReviewRequest, ReviewResponse, UsageResponse
+from logging_config import setup_logging, correlation_id_var
 
 # ---------------------------------------------------------------------------
 # Startup
@@ -42,8 +45,22 @@ from schemas import Issue, ReviewRequest, ReviewResponse
 
 load_dotenv()  # reads GITHUB_TOKEN (and any other vars) from .env
 
-logging.basicConfig(level=logging.INFO)
+# Set up structured JSON logging (stdout-only)
+setup_logging()
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Usage Statistics
+# ---------------------------------------------------------------------------
+
+_usage_stats = {
+    "total_requests": 0,
+    "ai_requests": 0,
+    "fallback_requests": 0,
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
+    "total_tokens": 0,
+}
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -86,55 +103,62 @@ _AI_MODEL = "llama-3.3-70b-versatile"
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _call_ai(code: str, language: str) -> list[Issue]:
+def map_severity(category: str, engine: str) -> str:
     """
-    Call the GitHub Models API and parse the structured response.
-
-    Retrieves relevant style-guide chunks via RAG before calling the model,
-    and injects them into the system prompt as grounding context for style
-    issue explanations. Bug detection is unaffected by this context.
-
-    Returns a list of Issue objects on success.
-    Raises any exception on failure — callers are responsible for catching.
+    Map raw linter category from Pylint or ESLint to canonical "bug" or "style" severity.
     """
-    # ── RAG retrieval ─────────────────────────────────────────────────────────
-    # Retrieve top-2 style-guide chunks for the submitted code.
-    # Purely local (no API call) — fails silently if model unavailable.
-    rag_chunks = retrieve(code, language, top_k=2)
-    if rag_chunks:
-        log.info(
-            "RAG retrieved %d chunk(s) for language=%s:",
-            len(rag_chunks), language,
-        )
-        for chunk in rag_chunks:
-            log.info("  [%s] score=%.3f  %.80s…", chunk["label"], chunk["score"], chunk["text"])
+    cat = category.strip().lower()
+    eng = engine.strip().lower()
+
+    if eng == "pylint":
+        # Pylint categories can be full names (e.g. 'error') or single letters (e.g. 'E')
+        mapping = {
+            "error": "bug",
+            "e": "bug",
+            "fatal": "bug",
+            "f": "bug",
+            "warning": "style",
+            "w": "style",
+            "convention": "style",
+            "c": "style",
+            "refactor": "style",
+            "r": "style",
+        }
+        if cat not in mapping:
+            raise KeyError(f"Unknown pylint category: {category}")
+        return mapping[cat]
+
+    elif eng == "eslint":
+        # ESLint severity: 2 (error) -> bug; 1 (warning) -> style
+        mapping = {
+            "2": "bug",
+            "error": "bug",
+            "1": "style",
+            "warning": "style",
+            "warn": "style",
+        }
+        if cat not in mapping:
+            raise KeyError(f"Unknown eslint category: {category}")
+        return mapping[cat]
     else:
-        log.info("RAG: no chunks retrieved for language=%s (model unavailable or not indexed)", language)
+        raise ValueError(f"Unknown engine: {engine}")
 
-    # ── AI call ───────────────────────────────────────────────────────────────
-    response = _ai_client.chat.completions.create(
-        model=_AI_MODEL,
-        max_tokens=1024,
-        messages=[
-            {"role": "system", "content": build_system_prompt_with_rag(language, rag_chunks)},
-            {"role": "user",   "content": code},
-        ],
-    )
 
-    raw_text = response.choices[0].message.content.strip()
-    log.info("AI raw response: %s", raw_text)
+def validate_input_length(code: str) -> bool:
+    """
+    Validate that the code does not exceed 500 lines or 10,000 characters.
+    """
+    line_count = len(code.splitlines())
+    char_count = len(code)
+    return line_count <= 500 and char_count <= 10000
 
-    # Strip markdown code fences if the model wraps its JSON in them
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```")[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
 
-    parsed = json.loads(raw_text)  # raises JSONDecodeError if malformed
-
-    # Validate shape: must have an "issues" list of dicts with required keys.
-    raw_issues: list[dict] = parsed.get("issues")
+def validate_ai_response(parsed_data: dict) -> list[Issue]:
+    """
+    Validate the structure and contents of parsed AI response, returning validated Issue objects.
+    Raises ValueError on any schema validation failure.
+    """
+    raw_issues = parsed_data.get("issues")
     if not isinstance(raw_issues, list):
         raise ValueError("AI response 'issues' is not a list")
 
@@ -175,13 +199,97 @@ def _call_ai(code: str, language: str) -> list[Issue]:
     return validated_issues
 
 
+def _call_ai(code: str, language: str) -> list[Issue]:
+    """
+    Call the GitHub Models API and parse the structured response.
+
+    Retrieves relevant style-guide chunks via RAG before calling the model,
+    and injects them into the system prompt as grounding context for style
+    issue explanations. Bug detection is unaffected by this context.
+
+    Returns a list of Issue objects on success.
+    Raises any exception on failure — callers are responsible for catching.
+    """
+    # ── RAG retrieval ─────────────────────────────────────────────────────────
+    # Retrieve top-2 style-guide chunks for the submitted code.
+    # Purely local (no API call) — fails silently if model unavailable.
+    rag_chunks = retrieve(code, language, top_k=2)
+    if rag_chunks:
+        log.debug(
+            "RAG retrieved %d chunk(s) for language=%s",
+            len(rag_chunks), language,
+            extra={
+                "event": "rag_retrieval_success",
+                "language": language,
+                "chunks_count": len(rag_chunks),
+                "chunks": [{"label": c["label"], "score": c["score"], "text_snippet": c["text"][:80]} for c in rag_chunks]
+            }
+        )
+    else:
+        log.debug(
+            "RAG: no chunks retrieved for language=%s",
+            language,
+            extra={
+                "event": "rag_retrieval_empty",
+                "language": language
+            }
+        )
+
+    # ── Deliberate AI failure hook for testing fallback path ──────────────────
+    if "TRIGGER_FALLBACK" in code:
+        raise ValueError("Forced AI review failure (TRIGGER_FALLBACK hook)")
+
+    # ── AI call ───────────────────────────────────────────────────────────────
+    response = _ai_client.chat.completions.create(
+        model=_AI_MODEL,
+        max_tokens=1024,
+        messages=[
+            {"role": "system", "content": build_system_prompt_with_rag(language, rag_chunks)},
+            {"role": "user",   "content": code},
+        ],
+    )
+
+    raw_text = response.choices[0].message.content.strip()
+    log.debug(
+        "AI raw response received",
+        extra={
+            "event": "ai_raw_response",
+            "raw_response": raw_text
+        }
+    )
+
+    # Track usage totals
+    if hasattr(response, "usage") and response.usage:
+        _usage_stats["total_prompt_tokens"] += getattr(response.usage, "prompt_tokens", 0)
+        _usage_stats["total_completion_tokens"] += getattr(response.usage, "completion_tokens", 0)
+        _usage_stats["total_tokens"] += getattr(response.usage, "total_tokens", 0)
+
+    # Strip markdown code fences if the model wraps its JSON in them
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+    parsed = json.loads(raw_text)  # raises JSONDecodeError if malformed
+
+    # Validate shape: must have an "issues" list of dicts with required keys.
+    return validate_ai_response(parsed)
+
+
 def _fallback_issues(code: str, language: str) -> list[Issue]:
     """
     Execute real linters via subprocess (Pylint for python, ESLint for javascript)
     and parse their output.
     """
     if language not in ("python", "javascript"):
-        log.warning("Unsupported language for fallback linter: %s", language)
+        log.warning(
+            "Unsupported language for fallback linter",
+            extra={
+                "event": "fallback_unsupported_language",
+                "language": language
+            }
+        )
         return []
 
     issues: list[Issue] = []
@@ -203,14 +311,20 @@ def _fallback_issues(code: str, language: str) -> list[Issue]:
                 # Pylint returns non-zero codes on style/lint findings. That is expected.
                 # Only raise if pylint crashes completely and prints no stdout.
                 if not res.stdout.strip():
-                    log.error("Pylint returned no stdout. Stderr: %s", res.stderr)
+                    log.error(
+                        "Pylint returned no stdout",
+                        extra={
+                            "event": "pylint_no_stdout",
+                            "stderr": res.stderr,
+                            "exit_code": res.returncode
+                        }
+                    )
                     return []
 
                 parsed = json.loads(res.stdout)
                 for item in parsed:
                     pylint_type = item.get("type", "convention")
-                    # E (error) & F (fatal) -> bug; C (convention), R (refactor) & W (warning) -> style
-                    severity = "bug" if pylint_type in ("error", "fatal") else "style"
+                    severity = map_severity(pylint_type, "pylint")
 
                     symbol = item.get("symbol", "linter-issue")
                     title = symbol.replace("-", " ").capitalize()
@@ -226,9 +340,16 @@ def _fallback_issues(code: str, language: str) -> list[Issue]:
                         fix=None
                     ))
             except subprocess.TimeoutExpired:
-                log.error("Pylint subprocess timed out after 5 seconds")
+                log.error(
+                    "Pylint subprocess timed out after 5 seconds",
+                    extra={"event": "pylint_timeout", "timeout": 5}
+                )
             except Exception as exc:
-                log.error("Pylint execution failed: %s", exc)
+                log.error(
+                    "Pylint execution failed",
+                    exc_info=True,
+                    extra={"event": "pylint_failed", "error": str(exc)}
+                )
 
         elif language == "javascript":
             # Write JS code to a temp file
@@ -273,7 +394,14 @@ export default [
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=5, shell=False, cwd=tmpdir)
 
                 if not res.stdout.strip():
-                    log.error("ESLint returned no stdout. Stderr: %s", res.stderr)
+                    log.error(
+                        "ESLint returned no stdout",
+                        extra={
+                            "event": "eslint_no_stdout",
+                            "stderr": res.stderr,
+                            "exit_code": res.returncode
+                        }
+                    )
                     return []
 
                 parsed = json.loads(res.stdout)
@@ -282,9 +410,8 @@ export default [
                     file_res = parsed[0]
                     messages = file_res.get("messages", [])
                     for msg in messages:
-                        # 2 (error) -> bug; 1 (warning) -> style
                         eslint_severity = msg.get("severity", 1)
-                        severity = "bug" if eslint_severity == 2 else "style"
+                        severity = map_severity(str(eslint_severity), "eslint")
 
                         rule_id = msg.get("ruleId")
                         title = rule_id.replace("-", " ").capitalize() if rule_id else "Linter issue"
@@ -301,9 +428,16 @@ export default [
                             fix=None
                         ))
             except subprocess.TimeoutExpired:
-                log.error("ESLint subprocess timed out after 5 seconds")
+                log.error(
+                    "ESLint subprocess timed out after 5 seconds",
+                    extra={"event": "eslint_timeout", "timeout": 5}
+                )
             except Exception as exc:
-                log.error("ESLint execution failed: %s", exc)
+                log.error(
+                    "ESLint execution failed",
+                    exc_info=True,
+                    extra={"event": "eslint_failed", "error": str(exc)}
+                )
 
     return issues
 
@@ -319,8 +453,14 @@ async def health() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Review endpoint
+# Review and Usage endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/api/usage", response_model=UsageResponse, tags=["usage"])
+async def get_usage() -> UsageResponse:
+    """Return the accumulated in-memory request and token usage statistics."""
+    return UsageResponse(**_usage_stats)
+
 
 @app.post("/api/review", response_model=ReviewResponse, tags=["review"])
 async def review_code(request: ReviewRequest) -> ReviewResponse:
@@ -335,13 +475,25 @@ async def review_code(request: ReviewRequest) -> ReviewResponse:
     this is an explicit test hook for the frontend error path, not a normal
     failure mode.
     """
+    # Generate correlation ID for tracking request lifecycle
+    correlation_id = str(uuid.uuid4())[:8]
+    correlation_id_var.set(correlation_id)
+
+    _usage_stats["total_requests"] += 1
 
     # ── Input size validation ────────────────────────────────────────────────
     # Cap submitted code at 500 lines or 10,000 characters
     line_count = len(request.code.splitlines())
     char_count = len(request.code)
-    if line_count > 500 or char_count > 10000:
-        log.warning("Code size validation failed: %d lines, %d chars", line_count, char_count)
+    if not validate_input_length(request.code):
+        log.warning(
+            "Code size validation failed; request rejected",
+            extra={
+                "event": "guardrail_size_rejection",
+                "line_count": line_count,
+                "char_count": char_count
+            }
+        )
         raise HTTPException(
             status_code=400,
             detail="Code exceeds the 500-line limit for this tool."
@@ -350,23 +502,58 @@ async def review_code(request: ReviewRequest) -> ReviewResponse:
     # ── Deliberate error test hook ────────────────────────────────────────────
     # Checked first, before any AI call, so it always fires.
     if "TRIGGER_500" in request.code:
-        log.warning("TRIGGER_500 detected — raising deliberate 500")
+        log.error(
+            "TRIGGER_500 detected — raising deliberate 500",
+            extra={"event": "simulated_server_error"}
+        )
         raise HTTPException(status_code=500, detail="Simulated server error")
+
+    log.info(
+        "Received code review request",
+        extra={
+            "event": "review_request_received",
+            "language": request.language,
+            "line_count": line_count,
+            "char_count": char_count
+        }
+    )
 
     # ── AI path ───────────────────────────────────────────────────────────────
     try:
-        issues = _call_ai(request.code, request.language)
-        log.info("AI review succeeded — %d issue(s)", len(issues))
+        issues = await asyncio.to_thread(_call_ai, request.code, request.language)
+        log.info(
+            "AI review succeeded",
+            extra={
+                "event": "ai_review_success",
+                "issues_count": len(issues)
+            }
+        )
+        _usage_stats["ai_requests"] += 1
         return ReviewResponse(source="ai", issues=issues)
 
     except Exception as exc:  # noqa: BLE001
         # Any failure in the AI path (bad token, timeout, rate limit, network
         # error, malformed JSON, schema mismatch, validation error) falls
         # through to the real linter fallback.
-        log.warning("AI review failed (%s: %s) — using fallback", type(exc).__name__, exc)
+        log.warning(
+            "AI review failed — falling back to static analysis",
+            exc_info=True,
+            extra={
+                "event": "ai_review_failed_fallback_triggered",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc)
+            }
+        )
 
     # ── Fallback path ─────────────────────────────────────────────────────────
     # Run real linter subprocess (pylint/eslint)
-    issues = _fallback_issues(request.code, request.language)
-    log.info("Fallback review complete — %d issue(s)", len(issues))
+    issues = await asyncio.to_thread(_fallback_issues, request.code, request.language)
+    log.info(
+        "Fallback review complete",
+        extra={
+            "event": "fallback_review_success",
+            "issues_count": len(issues)
+        }
+    )
+    _usage_stats["fallback_requests"] += 1
     return ReviewResponse(source="fallback", issues=issues)
