@@ -142,13 +142,15 @@ This project embraces real-world operational trade-offs rather than hiding them:
 
 *   **Total Cost**: **$0/month** (runs on free hobby tiers of Vercel, Render, and Groq).
 *   **Upgrade Path**: If guaranteed uptime is required to eliminate the Render cold-start latency, the backend can be upgraded to the **Render Starter tier** for **$7/month**.
-*   For further cost breakdowns, refer to [cost-sheet.md](file:///Users/macbook/repos/practice/client_communication_and_approval/cost-sheet.md) and [monthly-cost-note.md](file:///Users/macbook/repos/practice/client_communication_and_approval/monthly-cost-note.md).
+*   For further cost breakdowns, refer to [cost-sheet.md](docs/deployment/cost-sheet.md) and [monthly-cost-note.md](docs/deployment/monthly-cost-note.md).
 
 ---
 
 ## Deep Documentation Links
 
-*   **Product Requirements Document (PRD)**: [PRD-code-review-assistant.md](file:///Users/macbook/repos/practice/PRD/PRD-code-review-assistant.md)
-*   **System Design & Architecture Notes**: [Design_Notes.md](file:///Users/macbook/repos/practice/PRD/Design_Notes.md)
-*   **Deployment Runbook**: [DEPLOY_RUNBOOK.md](file:///Users/macbook/repos/practice/DEPLOY_RUNBOOK.md)
-*   **Exploratory Test & Bug Log**: [bug-log.md](file:///Users/macbook/repos/practice/client_communication_and_approval/bug-log.md)
+*   **Product Requirements Document (PRD)**: [PRD-code-review-assistant.md](docs/planning/PRD-code-review-assistant.md)
+*   **System Design & Architecture Notes**: [Design_Notes.md](docs/planning/Design_Notes.md)
+*   **Deployment Runbook**: [DEPLOY_RUNBOOK.md](docs/deployment/DEPLOY_RUNBOOK.md)
+*   **Exploratory Test & Bug Log**: [bug-log.md](docs/testing/bug-log.md)
+*   **Project Retrospective**: [retrospective.md](docs/retrospective.md)
+
