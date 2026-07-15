@@ -62,14 +62,51 @@ _usage_stats = {
     "total_tokens": 0,
 }
 
+# ---------------------------------------------------------------------------
+# Ephemeral Request Cache
+# ---------------------------------------------------------------------------
+import hashlib
+import threading
+
+class EphemeralCache:
+    def __init__(self, maxsize: int = 128):
+        self._lock = threading.Lock()
+        self._cache = {}
+        self._maxsize = maxsize
+
+    def get(self, code: str, language: str) -> ReviewResponse | None:
+        key = self._make_key(code, language)
+        with self._lock:
+            return self._cache.get(key)
+
+    def set(self, code: str, language: str, response: ReviewResponse):
+        key = self._make_key(code, language)
+        with self._lock:
+            if len(self._cache) >= self._maxsize:
+                # Evict the oldest item
+                first_key = next(iter(self._cache))
+                self._cache.pop(first_key)
+            self._cache[key] = response
+
+    def _make_key(self, code: str, language: str) -> str:
+        hasher = hashlib.md5()
+        hasher.update(code.encode("utf-8"))
+        hasher.update(language.encode("utf-8"))
+        return hasher.hexdigest()
+
+_review_cache = EphemeralCache()
+
 # In-memory tracking of request quota limits.
 # Render free tier restarts reset this count.
 DAILY_QUOTA_LIMIT = 1000
 _alerted_80_percent = False
 
+
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
+
+
 
 app = FastAPI(
     title="Code Review API",
@@ -219,7 +256,8 @@ def _call_ai(code: str, language: str) -> list[Issue]:
     # ── RAG retrieval ─────────────────────────────────────────────────────────
     # Retrieve top-2 style-guide chunks for the submitted code.
     # Purely local (no API call) — fails silently if model unavailable.
-    rag_chunks = retrieve(code, language, top_k=2)
+    rag_chunks = retrieve(code, language, top_k=1)
+
     if rag_chunks:
         log.debug(
             "RAG retrieved %d chunk(s) for language=%s",
@@ -596,6 +634,19 @@ async def review_code(request: ReviewRequest) -> ReviewResponse:
         )
         raise HTTPException(status_code=500, detail="Simulated server error")
 
+    # ── Check Cache ───────────────────────────────────────────────────────────
+    cached = _review_cache.get(request.code, request.language)
+    if cached is not None:
+        log.info(
+            "Cache hit — returning cached review response",
+            extra={
+                "event": "cache_hit",
+                "language": request.language,
+                "source": cached.source
+            }
+        )
+        return cached
+
     log.info(
         "Received code review request",
         extra={
@@ -617,7 +668,9 @@ async def review_code(request: ReviewRequest) -> ReviewResponse:
             }
         )
         _usage_stats["ai_requests"] += 1
-        return ReviewResponse(source="ai", issues=issues)
+        res = ReviewResponse(source="ai", issues=issues)
+        _review_cache.set(request.code, request.language, res)
+        return res
 
     except Exception as exc:  # noqa: BLE001
         # Any failure in the AI path (bad token, timeout, rate limit, network
@@ -644,4 +697,7 @@ async def review_code(request: ReviewRequest) -> ReviewResponse:
         }
     )
     _usage_stats["fallback_requests"] += 1
-    return ReviewResponse(source="fallback", issues=issues)
+    res = ReviewResponse(source="fallback", issues=issues)
+    _review_cache.set(request.code, request.language, res)
+    return res
+

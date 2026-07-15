@@ -10,10 +10,12 @@ An explanation-first code review tool that analyzes Python and JavaScript snippe
 
 *   **Dual-Path Architecture**: Runs primary reviews using the Groq AI engine (`llama-3.3-70b-versatile`); automatically switches to local subprocess linters (Pylint/ESLint) on AI failure.
 *   **Style Guide Grounding (RAG)**: Uses a local TF-IDF retriever to extract style excerpts from PEP 8 and JavaScript guides, ensuring style warnings explicitly reference official conventions (e.g. *"Per PEP 8 naming conventions..."*).
+*   **Ephemeral Caching**: Caches review responses in-memory using an MD5 hash of `code + language` as the key. Duplicate submissions of unchanged snippets bypass the Groq API entirely.
 *   **Pragmatic Senior Guidelines**: Follows clean-code rules (performance prioritization, PEP 484/604 compliance, and obvious contextual naming) to prevent pedantic critique.
 *   **Structured Logging & Tracing**: Injects correlation IDs into request logs for easy distributed request tracking.
 *   **Usage Alerts**: Tracks API request volume in-memory and alerts via a Discord webhook at 80% of the daily quota.
 *   **Honest Error Handling**: Gracefully renders a clean `/error` fallback view if both the AI engine and local linters fail to execute, preventing silent crashes or blank screens.
+
 
 ---
 
